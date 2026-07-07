@@ -1,0 +1,6 @@
+# NetSentinel core uses only the Python standard library — no install
+# required beyond Python 3.8+. This file is kept for optional extras
+# and CI tooling.
+
+# Optional: only needed if you want to run the test suite
+pytest>=7.4.0
