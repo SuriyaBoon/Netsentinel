@@ -7,3 +7,4 @@ venv/
 *.json
 !package.json
 .DS_Store
+graphify-out/

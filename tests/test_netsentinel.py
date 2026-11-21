@@ -112,3 +112,14 @@ def test_guess_service_uses_banner_over_port():
 def test_guess_service_falls_back_to_port_table():
     assert banner.guess_service(22, None) == "ssh"
     assert banner.guess_service(59999, None) == "unknown"
+
+
+# --------------------------------------------------------------------------
+# Platform guards
+# --------------------------------------------------------------------------
+
+def test_syn_scan_raises_permission_error_without_geteuid(monkeypatch):
+    """Windows has no os.geteuid; the SYN scan must fail cleanly, not crash."""
+    monkeypatch.delattr(scanner.os, "geteuid", raising=False)
+    with pytest.raises(PermissionError, match="--mode tcp"):
+        scanner.tcp_syn_scan("127.0.0.1", [80], threads=1, timeout=0.1)

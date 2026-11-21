@@ -206,12 +206,26 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
     return PortResult(port=port, protocol="tcp", state=state)
 
 
-def tcp_syn_scan(host: str, ports: List[int], threads: int, timeout: float) -> List[PortResult]:
-    if os.geteuid() != 0:
+def _require_raw_socket_privileges() -> None:
+    """Raise PermissionError unless the process may open raw sockets."""
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        # os.geteuid does not exist on Windows; raw sockets there need an
+        # elevated shell, which we cannot detect portably.
+        raise PermissionError(
+            "TCP SYN scan requires raw sockets and elevated privileges. "
+            "On Windows, run from an Administrator shell, or use --mode tcp "
+            "for a connect scan instead."
+        )
+    if geteuid() != 0:
         raise PermissionError(
             "TCP SYN scan requires root privileges (raw sockets). "
             "Re-run with sudo, or use --mode tcp for a connect scan instead."
         )
+
+
+def tcp_syn_scan(host: str, ports: List[int], threads: int, timeout: float) -> List[PortResult]:
+    _require_raw_socket_privileges()
     src_ip = _get_local_ip(host)
     results = []
     # SYN scan is intentionally lower-concurrency by default since all
