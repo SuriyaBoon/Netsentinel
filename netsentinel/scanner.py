@@ -97,7 +97,15 @@ def _checksum(data: bytes) -> int:
     return (~total) & 0xFFFF
 
 
-def _build_syn_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int) -> bytes:
+def _build_tcp_packet(
+    src_ip: str,
+    dst_ip: str,
+    src_port: int,
+    dst_port: int,
+    tcp_flags: int = 0x02,
+    tcp_seq: Optional[int] = None,
+    tcp_ack_seq: int = 0,
+) -> bytes:
     # --- IP header ---
     ip_ihl_ver = (4 << 4) + 5
     ip_tos = 0
@@ -117,11 +125,10 @@ def _build_syn_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int) ->
     )
 
     # --- TCP header ---
-    tcp_seq = random.randint(0, 4294967295)
-    tcp_ack_seq = 0
+    if tcp_seq is None:
+        tcp_seq = random.randint(0, 4294967295)
     tcp_doff = 5
-    tcp_flags_syn = 0x02
-    tcp_window = socket.htons(5840)
+    tcp_window = 5840  # packed below with network byte order
     tcp_check = 0
     tcp_urg_ptr = 0
     offset_res = (tcp_doff << 4) + 0
@@ -129,7 +136,7 @@ def _build_syn_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int) ->
     tcp_header = struct.pack(
         "!HHLLBBHHH",
         src_port, dst_port, tcp_seq, tcp_ack_seq,
-        offset_res, tcp_flags_syn, tcp_window, tcp_check, tcp_urg_ptr,
+        offset_res, tcp_flags, tcp_window, tcp_check, tcp_urg_ptr,
     )
 
     pseudo_header = struct.pack(
@@ -139,8 +146,8 @@ def _build_syn_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int) ->
 
     tcp_header = struct.pack(
         "!HHLLBBH",
-        src_port, dst_port, tcp_seq, tcp_ack_seq, offset_res, tcp_flags_syn, tcp_window,
-    ) + struct.pack("H", tcp_check) + struct.pack("!H", tcp_urg_ptr)
+        src_port, dst_port, tcp_seq, tcp_ack_seq, offset_res, tcp_flags, tcp_window,
+    ) + struct.pack("!H", tcp_check) + struct.pack("!H", tcp_urg_ptr)
 
     return ip_header + tcp_header
 
@@ -170,7 +177,7 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
 
     state = "filtered"
     try:
-        packet = _build_syn_packet(src_ip, host, src_port, port)
+        packet = _build_tcp_packet(src_ip, host, src_port, port)
         send_sock.sendto(packet, (host, 0))
 
         deadline = time.time() + timeout
@@ -185,12 +192,16 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
                 continue
             tcp_header = data[20:40]
             tcph = struct.unpack("!HHLLBBHHH", tcp_header)
-            resp_src_port, resp_dst_port, _, _, _, flags = tcph[0], tcph[1], tcph[2], tcph[3], tcph[4], tcph[5]
+            resp_src_port, resp_dst_port, resp_ack, flags = tcph[0], tcph[1], tcph[3], tcph[5]
             if resp_src_port == port and resp_dst_port == src_port:
                 if flags & 0x12 == 0x12:      # SYN+ACK
                     state = "open"
-                    # Send RST to close the half-open connection cleanly
-                    rst = _build_syn_packet(src_ip, host, src_port, port)
+                    # Send a RST (seq = peer's ACK) to close the half-open
+                    # connection cleanly instead of leaving it dangling.
+                    rst = _build_tcp_packet(
+                        src_ip, host, src_port, port,
+                        tcp_flags=0x04, tcp_seq=resp_ack,
+                    )
                     send_sock.sendto(rst, (host, 0))
                 elif flags & 0x14 == 0x14:    # RST+ACK
                     state = "closed"

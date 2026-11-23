@@ -7,10 +7,12 @@ These tests spin up a local TCP/HTTP server on loopback so they run
 anywhere (CI, laptop, VM) without needing real network targets.
 """
 
+import http.server
+import socket
 import socketserver
+import struct
 import threading
 import time
-import http.server
 
 import pytest
 
@@ -123,3 +125,31 @@ def test_syn_scan_raises_permission_error_without_geteuid(monkeypatch):
     monkeypatch.delattr(scanner.os, "geteuid", raising=False)
     with pytest.raises(PermissionError, match="--mode tcp"):
         scanner.tcp_syn_scan("127.0.0.1", [80], threads=1, timeout=0.1)
+
+
+# --------------------------------------------------------------------------
+# Raw TCP packet construction (pure functions, no raw sockets)
+# --------------------------------------------------------------------------
+
+def test_syn_packet_defaults_to_syn_flag():
+    packet = scanner._build_tcp_packet("10.0.0.1", "10.0.0.2", 40000, 80, tcp_seq=1000)
+    tcp_header = struct.unpack("!HHLLBBHHH", packet[20:40])
+    assert tcp_header[5] == 0x02
+
+
+def test_rst_teardown_packet_has_rst_flag_and_valid_checksum():
+    packet = scanner._build_tcp_packet(
+        "10.0.0.1", "10.0.0.2", 40000, 80,
+        tcp_flags=0x04, tcp_seq=123456,
+    )
+    ip_header = struct.unpack("!BBHHHBBH4s4s", packet[:20])
+    tcp_header = struct.unpack("!HHLLBBHHH", packet[20:40])
+
+    assert tcp_header[5] == 0x04          # RST flag
+    assert tcp_header[2] == 123456        # seq mirrors the peer's ACK
+
+    pseudo_header = struct.pack(
+        "!4s4sBBH",
+        ip_header[8], ip_header[9], 0, socket.IPPROTO_TCP, len(packet) - 20,
+    )
+    assert scanner._checksum(pseudo_header + packet[20:]) == 0
