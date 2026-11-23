@@ -60,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Write structured JSON report to FILE")
     p.add_argument("--shodan-key", metavar="KEY", default=os.environ.get("SHODAN_API_KEY"),
                     help="Shodan API key for public-IP enrichment (or set SHODAN_API_KEY)")
+    p.add_argument("--open", action="store_true",
+                    help="Only show open ports in terminal and JSON output")
     p.add_argument("--no-color", action="store_true", help="Disable colored output")
     return p
 
@@ -85,6 +87,7 @@ def _scan_single_host(
     timeout: float,
     use_color: bool,
     shodan_key: Optional[str],
+    open_only: bool = False,
 ) -> List:
     """Scan one host across all enabled modes and report results."""
     results = []
@@ -97,6 +100,9 @@ def _scan_single_host(
             print(f"[!] {exc}")
     if "udp" in modes:
         results += scanner.udp_scan(host, ports, min(threads, 100), max(timeout, 1.5))
+
+    if open_only:
+        results = [r for r in results if r.state == "open"]
 
     if "banner" in modes:
         for r in results:
@@ -146,7 +152,7 @@ def main(argv=None) -> int:
     for host in live_hosts:
         results = _scan_single_host(
             host, ports, modes, args.threads, args.timeout,
-            use_color, args.shodan_key,
+            use_color, args.shodan_key, args.open,
         )
         all_results[host] = results
 
