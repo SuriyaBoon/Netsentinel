@@ -23,7 +23,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from . import discovery, scanner, banner, report
 
@@ -80,7 +80,7 @@ def _resolve_live_hosts(args, candidates: List[str], use_color: bool) -> List[st
 def _scan_single_host(
     host: str,
     ports: List[int],
-    modes: set[str],
+    modes: Set[str],
     threads: int,
     timeout: float,
     use_color: bool,

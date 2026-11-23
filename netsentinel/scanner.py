@@ -26,7 +26,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Set
 
 
 @dataclass
@@ -49,7 +49,7 @@ def parse_port_spec(spec: str) -> List[int]:
     if not spec or not spec.strip():
         raise ValueError("Empty port specification")
 
-    ports = set()
+    ports: Set[int] = set()
     for raw_chunk in spec.split(","):
         chunk = raw_chunk.strip()
         if not chunk:
