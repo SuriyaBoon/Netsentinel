@@ -3,8 +3,6 @@ report.py — Terminal (colour-coded) and structured JSON reporting.
 """
 
 import json
-import sys
-import time
 from typing import Dict, List
 
 from .scanner import PortResult
