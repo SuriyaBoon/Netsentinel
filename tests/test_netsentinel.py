@@ -183,3 +183,27 @@ def test_cli_rejects_malformed_ports(bad_ports, capsys):
     assert exit_code != 0
     assert "[!]" in captured.out
     assert "Invalid --ports value" in captured.out
+
+
+# --------------------------------------------------------------------------#
+# CLI orchestration helpers (discover-only / skip-discovery)
+# --------------------------------------------------------------------------#
+
+def test_discover_only_stops_before_scanning(test_server, capsys):
+    host, port = test_server
+    exit_code = cli.main(["--target", host, "--discover-only", "--ports", str(port)])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Discovering live hosts" in captured.out
+    # discover-only returns before port scanning, so the port number is never printed
+    assert str(port) not in captured.out
+
+
+def test_skip_discovery_scans_directly(test_server, capsys):
+    host, port = test_server
+    exit_code = cli.main(
+        ["--target", host, "--skip-discovery", "--ports", str(port), "--mode", "tcp"]
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert str(port) in captured.out

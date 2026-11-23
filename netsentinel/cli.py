@@ -23,6 +23,7 @@ import argparse
 import os
 import sys
 import time
+from typing import List, Optional
 
 from . import discovery, scanner, banner, report
 
@@ -63,6 +64,63 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _resolve_live_hosts(args, candidates: List[str], use_color: bool) -> List[str]:
+    """Run host discovery unless --skip-discovery is set; return live hosts."""
+    if args.skip_discovery:
+        return candidates
+    print(f"[*] Discovering live hosts among {len(candidates)} candidate(s)...")
+    t0 = time.time()
+    live_hosts = discovery.sweep(candidates, threads=min(args.threads, 200))
+    print(f"[+] {len(live_hosts)} host(s) alive ({time.time() - t0:.1f}s)")
+    for h in live_hosts:
+        print(f"    {h}")
+    return live_hosts
+
+
+def _scan_single_host(
+    host: str,
+    ports: List[int],
+    modes: set[str],
+    threads: int,
+    timeout: float,
+    use_color: bool,
+    shodan_key: Optional[str],
+) -> List:
+    """Scan one host across all enabled modes and report results."""
+    results = []
+    if "tcp" in modes:
+        results += scanner.tcp_connect_scan(host, ports, threads, timeout)
+    if "syn" in modes:
+        try:
+            results += scanner.tcp_syn_scan(host, ports, threads, timeout)
+        except PermissionError as exc:
+            print(f"[!] {exc}")
+    if "udp" in modes:
+        results += scanner.udp_scan(host, ports, min(threads, 100), max(timeout, 1.5))
+
+    if "banner" in modes:
+        for r in results:
+            if r.state == "open" and r.protocol == "tcp":
+                r.banner = banner.grab_banner(host, r.port, timeout=timeout + 1)
+            r.service_guess = banner.guess_service(r.port, r.banner)
+    else:
+        for r in results:
+            r.service_guess = banner.guess_service(r.port, None)
+
+    report.print_host_results(host, results, use_color=use_color)
+
+    if shodan_key:
+        from . import shodan_enrich
+        info = shodan_enrich.enrich(host, shodan_key)
+        if info:
+            print(f"  [shodan] org={info['org']} country={info['country']} "
+                  f"known_open_ports={info['known_open_ports']}")
+            if info["vulns"]:
+                print(f"  [shodan] known CVEs: {', '.join(info['vulns'][:10])}")
+
+    return results
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     modes = {m.strip().lower() for m in args.mode.split(",")}
@@ -78,55 +136,19 @@ def main(argv=None) -> int:
     print(f"[*] NetSentinel — target={args.target} ports={len(ports)} "
           f"mode={','.join(sorted(modes))} threads={args.threads}")
 
-    # --- Host discovery ---
     candidates = discovery.expand_targets(args.target)
-    if args.skip_discovery:
-        live_hosts = candidates
-    else:
-        print(f"[*] Discovering live hosts among {len(candidates)} candidate(s)...")
-        t0 = time.time()
-        live_hosts = discovery.sweep(candidates, threads=min(args.threads, 200))
-        print(f"[+] {len(live_hosts)} host(s) alive ({time.time() - t0:.1f}s)")
-        for h in live_hosts:
-            print(f"    {h}")
+    live_hosts = _resolve_live_hosts(args, candidates, use_color)
 
     if args.discover_only or not live_hosts:
         return 0
 
-    # --- Port scanning per host ---
     all_results = {}
     for host in live_hosts:
-        results = []
-        if "tcp" in modes:
-            results += scanner.tcp_connect_scan(host, ports, args.threads, args.timeout)
-        if "syn" in modes:
-            try:
-                results += scanner.tcp_syn_scan(host, ports, args.threads, args.timeout)
-            except PermissionError as exc:
-                print(f"[!] {exc}")
-        if "udp" in modes:
-            results += scanner.udp_scan(host, ports, min(args.threads, 100), max(args.timeout, 1.5))
-
-        if "banner" in modes:
-            for r in results:
-                if r.state == "open" and r.protocol == "tcp":
-                    r.banner = banner.grab_banner(host, r.port, timeout=args.timeout + 1)
-                r.service_guess = banner.guess_service(r.port, r.banner)
-        else:
-            for r in results:
-                r.service_guess = banner.guess_service(r.port, None)
-
+        results = _scan_single_host(
+            host, ports, modes, args.threads, args.timeout,
+            use_color, args.shodan_key,
+        )
         all_results[host] = results
-        report.print_host_results(host, results, use_color=use_color)
-
-        if args.shodan_key:
-            from . import shodan_enrich
-            info = shodan_enrich.enrich(host, args.shodan_key)
-            if info:
-                print(f"  [shodan] org={info['org']} country={info['country']} "
-                      f"known_open_ports={info['known_open_ports']}")
-                if info["vulns"]:
-                    print(f"  [shodan] known CVEs: {', '.join(info['vulns'][:10])}")
 
     if args.output:
         meta = {
