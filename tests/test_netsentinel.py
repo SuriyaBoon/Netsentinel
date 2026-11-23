@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from netsentinel import scanner, banner, discovery
+from netsentinel import banner, cli, discovery, scanner
 
 
 # --------------------------------------------------------------------------
@@ -42,6 +42,23 @@ def test_parse_dedupes_and_sorts():
 def test_parse_ignores_out_of_range():
     result = scanner.parse_port_spec("0,70000,443")
     assert result == [443]
+
+
+@pytest.mark.parametrize(
+    "spec, fragment",
+    [
+        ("abc", "abc"),
+        ("80-", "80-"),
+        ("-80", "-80"),
+        ("80-90-100", "80-90-100"),
+        ("80,,443", "empty"),
+        ("", "Empty"),
+    ],
+)
+def test_parse_rejects_malformed_specs(spec, fragment):
+    with pytest.raises(ValueError) as excinfo:
+        scanner.parse_port_spec(spec)
+    assert fragment in str(excinfo.value)
 
 
 # --------------------------------------------------------------------------
@@ -153,3 +170,16 @@ def test_rst_teardown_packet_has_rst_flag_and_valid_checksum():
         ip_header[8], ip_header[9], 0, socket.IPPROTO_TCP, len(packet) - 20,
     )
     assert scanner._checksum(pseudo_header + packet[20:]) == 0
+
+
+# --------------------------------------------------------------------------
+# CLI error handling
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_ports", ["abc", "80-", "-80", ""])
+def test_cli_rejects_malformed_ports(bad_ports, capsys):
+    exit_code = cli.main(["--target", "127.0.0.1", "--ports", bad_ports])
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "[!]" in captured.out
+    assert "Invalid --ports value" in captured.out

@@ -69,7 +69,11 @@ def main(argv=None) -> int:
     use_color = not args.no_color and sys.stdout.isatty()
 
     port_spec = TOP_100_PORTS if args.ports == "top100" else args.ports
-    ports = scanner.parse_port_spec(port_spec)
+    try:
+        ports = scanner.parse_port_spec(port_spec)
+    except ValueError as exc:
+        print(f"[!] Invalid --ports value: {exc}")
+        return 2
 
     print(f"[*] NetSentinel — target={args.target} ports={len(ports)} "
           f"mode={','.join(sorted(modes))} threads={args.threads}")

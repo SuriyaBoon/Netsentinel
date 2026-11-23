@@ -42,17 +42,32 @@ def parse_port_spec(spec: str) -> List[int]:
     """
     Parse a port spec like '22,80,443' or '1-1024' or '1-100,443,8000-8100'
     into a sorted list of unique ports.
+
+    Raises ValueError for malformed specs: empty specs or tokens, non-numeric
+    values, and incomplete or multi-dash ranges.
     """
+    if not spec or not spec.strip():
+        raise ValueError("Empty port specification")
+
     ports = set()
-    for chunk in spec.split(","):
-        chunk = chunk.strip()
+    for raw_chunk in spec.split(","):
+        chunk = raw_chunk.strip()
         if not chunk:
-            continue
+            raise ValueError(f"Invalid port specification: empty token in {spec!r}")
         if "-" in chunk:
-            start, end = chunk.split("-", 1)
-            ports.update(range(int(start), int(end) + 1))
+            parts = chunk.split("-")
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise ValueError(f"Invalid port range token: {chunk!r}")
+            try:
+                start, end = int(parts[0]), int(parts[1])
+            except ValueError:
+                raise ValueError(f"Invalid port range token: {chunk!r}") from None
+            ports.update(range(start, end + 1))
         else:
-            ports.add(int(chunk))
+            try:
+                ports.add(int(chunk))
+            except ValueError:
+                raise ValueError(f"Invalid port token: {chunk!r}") from None
     return sorted(p for p in ports if 0 < p <= 65535)
 
 
