@@ -23,6 +23,10 @@ _FALLBACK_PROBE_PORTS = (80, 443, 22, 445, 3389)
 
 _PING_AVAILABLE = shutil.which("ping") is not None
 
+# Maximum number of host IPs to expand from a CIDR network (/16 = 65536 hosts).
+# Larger networks (e.g., /8 = 16.7M) would cause unbounded memory allocation.
+MAX_CIDR_HOSTS = 65536
+
 
 def _tcp_fallback_ping(host: str, timeout_ms: int) -> bool:
     """Liveness check via TCP connect attempts, used when ICMP is unavailable."""
@@ -80,15 +84,35 @@ def expand_targets(target: str) -> List[str]:
     """
     Expand a target spec into a list of individual host IPs.
     Supports: single IP, CIDR ('192.168.1.0/24'), or hostname.
+    Raises ValueError if target is empty, contains whitespace, starts with '-',
+    or if a CIDR network exceeds MAX_CIDR_HOSTS host addresses.
     """
+    # Check for whitespace before stripping (rejects leading/trailing/internal)
+    if any(ch.isspace() for ch in target):
+        raise ValueError(f"Target contains whitespace: {target!r}")
+    
+    target = target.strip()
+    if not target:
+        raise ValueError("Empty target")
+    if target.startswith("-"):
+        raise ValueError(f"Target cannot start with '-': {target!r}")
+
+    # Validate IP/CIDR format first
     try:
         network = ipaddress.ip_network(target, strict=False)
-        if network.num_addresses > 1:
-            return [str(ip) for ip in network.hosts()]
-        return [str(network.network_address)]
     except ValueError:
         # Not an IP/CIDR — treat as a hostname/single target
         return [target]
+
+    # Now enforce CIDR size limit (after successful parsing)
+    if network.num_addresses > 1:
+        if network.num_addresses > MAX_CIDR_HOSTS:
+            raise ValueError(
+                f"CIDR {target!r} expands to {network.num_addresses} addresses "
+                f"(limit: {MAX_CIDR_HOSTS})"
+            )
+        return [str(ip) for ip in network.hosts()]
+    return [str(network.network_address)]
 
 
 def sweep(targets: List[str], threads: int = 50, timeout_ms: int = 800) -> List[str]:

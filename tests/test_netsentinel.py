@@ -82,6 +82,54 @@ def test_expand_hostname_passthrough():
 
 
 # --------------------------------------------------------------------------
+# expand_targets validation (T-11a)
+# --------------------------------------------------------------------------
+
+def test_expand_rejects_empty_target():
+    with pytest.raises(ValueError, match="Empty target"):
+        discovery.expand_targets("")
+
+def test_expand_rejects_whitespace_target():
+    # Whitespace-only is caught by whitespace check
+    with pytest.raises(ValueError, match="whitespace"):
+        discovery.expand_targets("  ")
+    # Target with trailing whitespace
+    with pytest.raises(ValueError, match="whitespace"):
+        discovery.expand_targets("192.168.1.1 ")
+
+def test_expand_rejects_flag_like_targets():
+    with pytest.raises(ValueError, match="cannot start with '-'"):
+        discovery.expand_targets("-t")
+    with pytest.raises(ValueError, match="cannot start with '-'"):
+        discovery.expand_targets("--help")
+
+def test_expand_rejects_oversized_cidr():
+    with pytest.raises(ValueError, match="65536"):
+        discovery.expand_targets("10.0.0.0/8")
+
+def test_expand_valid_cidr_under_limit():
+    # /30 = 2 usable hosts, well under the 65536 limit
+    hosts = discovery.expand_targets("192.168.1.0/30")
+    assert hosts == ["192.168.1.1", "192.168.1.2"]
+
+def test_expand_hostname_passthrough_still_works():
+    assert discovery.expand_targets("example.internal") == ["example.internal"]
+
+
+# --------------------------------------------------------------------------
+# CLI --target validation (T-11a)
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_target", ["", "  ", "10.0.0.0/8"])
+def test_cli_rejects_invalid_targets(bad_target, capsys):
+    exit_code = cli.main(["--target", bad_target, "--ports", "22", "--skip-discovery"])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "[!]" in captured.out
+    assert "Invalid --target value" in captured.out
+
+
+# --------------------------------------------------------------------------
 # Live scan tests against a local test server
 # --------------------------------------------------------------------------
 

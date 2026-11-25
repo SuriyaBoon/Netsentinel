@@ -142,7 +142,12 @@ def main(argv=None) -> int:
     print(f"[*] NetSentinel — target={args.target} ports={len(ports)} "
           f"mode={','.join(sorted(modes))} threads={args.threads}")
 
-    candidates = discovery.expand_targets(args.target)
+    try:
+        candidates = discovery.expand_targets(args.target)
+    except ValueError as exc:
+        print(f"[!] Invalid --target value: {exc}")
+        return 2
+
     live_hosts = _resolve_live_hosts(args, candidates, use_color)
 
     if args.discover_only or not live_hosts:
