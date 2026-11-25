@@ -44,7 +44,7 @@ def parse_port_spec(spec: str) -> List[int]:
     into a sorted list of unique ports.
 
     Raises ValueError for malformed specs: empty specs or tokens, non-numeric
-    values, and incomplete or multi-dash ranges.
+    values, incomplete or multi-dash ranges, and reversed ranges (start > end).
     """
     if not spec or not spec.strip():
         raise ValueError("Empty port specification")
@@ -62,6 +62,8 @@ def parse_port_spec(spec: str) -> List[int]:
                 start, end = int(parts[0]), int(parts[1])
             except ValueError:
                 raise ValueError(f"Invalid port range token: {chunk!r}") from None
+            if start > end:
+                raise ValueError(f"Invalid port range token: {chunk!r}")
             ports.update(range(start, end + 1))
         else:
             try:
@@ -181,6 +183,9 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
     Send one raw SYN packet and listen for a reply on a separate raw
     socket. Falls back to 'filtered' on timeout (no distinguishable
     response), matching Nmap's convention for a silently dropped SYN.
+
+    Handles variable IPv4 header length (IP options) by computing IHL
+    from the version/IHL byte, and treats any RST flag (0x04) as 'closed'.
     """
     src_port = random.randint(1025, 65534)
 
@@ -201,11 +206,20 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
                 data, _ = recv_sock.recvfrom(65535)
             except socket.timeout:
                 break
-            ip_header = data[:20]
-            iph = struct.unpack("!BBHHHBBH4s4s", ip_header)
+            # Guard: minimum IPv4 header (20 bytes)
+            if len(data) < 20:
+                continue
+            ip_version_ihl = data[0]
+            ihl = (ip_version_ihl & 0x0F) * 4  # IHL is in 32-bit words
+            if ihl < 20 or len(data) < ihl + 20:
+                continue
+            ip_header = data[:ihl]
+            iph = struct.unpack("!BBHHHBBH4s4s", ip_header[:20])
             if socket.inet_ntoa(iph[8]) != host:
                 continue
-            tcp_header = data[20:40]
+            tcp_header = data[ihl:ihl + 20]
+            if len(tcp_header) < 20:
+                continue
             tcph = struct.unpack("!HHLLBBHHH", tcp_header)
             resp_src_port, resp_dst_port, resp_ack, flags = tcph[0], tcph[1], tcph[3], tcph[5]
             if resp_src_port == port and resp_dst_port == src_port:
@@ -218,7 +232,7 @@ def _syn_probe_one(host: str, port: int, timeout: float, src_ip: str) -> PortRes
                         tcp_flags=0x04, tcp_seq=resp_ack,
                     )
                     send_sock.sendto(rst, (host, 0))
-                elif flags & 0x14 == 0x14:    # RST+ACK
+                elif flags & 0x04:            # RST (bare or RST+ACK)
                     state = "closed"
                 break
     except PermissionError:

@@ -11,8 +11,11 @@ This module makes a read-only GET request to Shodan's REST API and
 does not perform any scanning itself.
 """
 
+import ipaddress
 import json
+import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -24,8 +27,33 @@ def enrich(ip: str, api_key: str, timeout: float = 5.0) -> Optional[dict]:
     """
     Look up `ip` on Shodan. Returns a trimmed dict of relevant fields,
     or None if the lookup fails (private IP, not indexed, bad key, etc).
+
+    Validates that `ip` resolves to a global (public) IPv4/IPv6 address;
+    returns None for private/loopback/reserved addresses. URL-encodes
+    both `ip` and `api_key` before building the request.
     """
-    url = SHODAN_HOST_URL.format(ip=ip, key=api_key)
+    # Resolve hostname if needed, then validate IP
+    try:
+        ip_addr = ipaddress.ip_address(ip)
+    except ValueError:
+        try:
+            resolved = socket.gethostbyname(ip)
+            ip_addr = ipaddress.ip_address(resolved)
+        except (socket.gaierror, ValueError):
+            return None
+
+    # Reject non-global (private, loopback, link-local, multicast, reserved) IPs
+    if not ip_addr.is_global:
+        return None
+
+    if not api_key:
+        return None
+
+    # URL-encode both parameters
+    safe_ip = urllib.parse.quote(str(ip_addr), safe="")
+    safe_key = urllib.parse.quote(api_key, safe="")
+    url = SHODAN_HOST_URL.format(ip=safe_ip, key=safe_key)
+
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
