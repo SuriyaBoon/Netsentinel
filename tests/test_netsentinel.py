@@ -597,3 +597,27 @@ def test_shodan_enrich_url_encoding(monkeypatch):
 # --------------------------------------------------------------------------
 # UTF-8 JSON export (T-11c)
 # --------------------------------------------------------------------------
+
+def test_write_json_report_utf8(tmp_path):
+    """Verify write_json_report writes valid UTF-8 with non-ASCII banners."""
+    from netsentinel import report, scanner
+    results = {
+        "127.0.0.1": [
+            scanner.PortResult(
+                port=443, protocol="tcp", state="open",
+                banner="TLS TLSv1.3 | CN=测试.com | expires Dec 31 2026 GMT | HTTP/1.0 200 OK",
+                service_guess="https"
+            ),
+        ]
+    }
+    meta = {"target": "127.0.0.1", "ports_scanned": 1, "mode": ["tcp"], "timestamp": "2026-11-25T00:00:00"}
+    out_path = tmp_path / "utf8-report.json"
+    report.write_json_report(str(out_path), results, meta)
+    # Read back as raw bytes and decode as UTF-8
+    content = out_path.read_bytes()
+    text = content.decode("utf-8")
+    assert "测试.com" in text
+    # Ensure it's valid JSON
+    import json
+    parsed = json.loads(text)
+    assert parsed["hosts"]["127.0.0.1"][0]["banner"] == "TLS TLSv1.3 | CN=测试.com | expires Dec 31 2026 GMT | HTTP/1.0 200 OK"

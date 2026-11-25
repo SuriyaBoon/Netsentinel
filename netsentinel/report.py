@@ -63,6 +63,6 @@ def build_json_report(scan_results: Dict[str, List[PortResult]], meta: dict) -> 
 
 def write_json_report(path: str, scan_results: Dict[str, List[PortResult]], meta: dict) -> None:
     report = build_json_report(scan_results, meta)
-    with open(path, "w") as f:
-        json.dump(report, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
     print(f"\n[+] JSON report written to {path}")

@@ -4,8 +4,7 @@ A multithreaded Python CLI tool for host discovery, port scanning, and
 service fingerprinting — built from scratch to understand how tools like
 Nmap actually work under the hood, rather than just how to run them.
 
-Built alongside Google Cybersecurity coursework and HackTheBox retired-
-machine practice; the scan methodology (discovery → port scan → service
+Built alongside Google Cybersecurity coursework and HackTheBox retired-machine practice; the scan methodology (discovery → port scan → service
 fingerprint) mirrors real-world enumeration workflows.
 
 ## Features
@@ -32,7 +31,7 @@ fingerprint) mirrors real-world enumeration workflows.
 - **2-step TLS/HTTPS inspection** (`grab_tls_banner`) — on TLS ports
   (`443`, `465`, `993`, `995`, `6443`, `8443`, `9443`) performs a verified
   `ssl.create_default_context()` handshake to capture TLS version,
-  certificate `commonName` / first SAN DNS entry, `notAfter` expiry, and
+  certificate `commonName` / first SAN DNS entry, `expires` expiry, and
   the inner `HEAD / HTTP/1.0` banner line; on `ssl.SSLCertVerificationError`
   (self-signed certs or raw IP targets) automatically retries with an
   unverified `CERT_NONE` context tagged `[unverified-cert]` so inspection
@@ -83,6 +82,16 @@ Accepts comma-separated ports (`22,80,443`), ranges (`1-1024`), or the
 `top100` preset. Empty tokens, non-numeric values, and incomplete or
 multi-dash ranges (`"80-"`, `"-80"`, `"80-90-100"`, `""`, `"80,,443"`) are
 rejected with `[!] Invalid --ports value: ...` and exit code `2`.
+
+Reversed ranges (`"443-80"`) are also rejected with exit code `2`.
+
+### Target validation (`--target`)
+
+Target specifications are validated before scanning. Empty targets,
+targets containing whitespace, flag-like arguments starting with `-`
+(e.g., `-t`, `--help`), and CIDR networks larger than `/16` (65,536
+addresses) are rejected with `[!] Invalid --target value: ...` and
+exit code `2`. Hostnames are passed through unchanged.
 
 ### Examples
 
@@ -136,7 +145,7 @@ privileges:
 192.168.1.10  (3 open / 1024 scanned)
      22/tcp OPEN       ssh   — SSH-2.0-OpenSSH_8.9p1
      80/tcp OPEN       http  — HTTP/1.1 200 OK
-    443/tcp OPEN       https — TLS TLSv1.3 | CN=example.com | notAfter Dec 31 23:59:59 2026 GMT | HTTP/1.0 200 OK
+    443/tcp OPEN       https — TLS TLSv1.3 | CN=example.com | expires Dec 31 23:59:59 2026 GMT | HTTP/1.0 200 OK
 
 [+] JSON report written to report.json
 ```
