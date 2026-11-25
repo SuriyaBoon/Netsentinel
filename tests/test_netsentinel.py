@@ -403,15 +403,15 @@ def test_open_filter_limits_json_to_open_ports(test_server, tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------
-# SYN reply parsing with variable IHL & bare RST (T-11b)
+# SYN reply parsing with variable IHL & bare RST (T-11b / T-11d)
 # --------------------------------------------------------------------------
 
-def test_syn_reply_parsing_ihl_and_bare_rst(monkeypatch):
+def test_syn_probe_handles_ipv4_options_and_sends_rst(monkeypatch):
     """
-    Test _syn_probe_one handles variable IPv4 IHL (IP options) and bare RST (0x04).
-    Uses a mocked raw socket to feed synthetic reply packets.
+    Test _syn_probe_one handles IPv4 options (IHL=6) and sends checksum-correct RST.
+    Mocks both send and recv sockets; feeds a synthetic SYN+ACK with 4-byte IP options.
     """
-    # Build a synthetic SYN/ACK reply with 4-byte IP options (IHL=6 -> 24 bytes)
+    # Build a synthetic SYN/ACK reply with 4-byte IP options (IHL=6 -> 24-byte IP header)
     # IP header (24 bytes): version=4, IHL=6, TTL=64, proto=TCP, src=10.0.0.2, dst=10.0.0.1
     # TCP header (20 bytes): sport=80, dport=40000, seq=1000, ack=2000, flags=SYN+ACK(0x12)
     import struct
@@ -472,7 +472,7 @@ def test_syn_reply_parsing_ihl_and_bare_rst(monkeypatch):
 
     synack_packet = ip_header + tcp_header
 
-    # Mock the recvfrom to return our synthetic packet
+    # Mock sockets: track what gets sent; feed the SYN+ACK on recv
     class MockRecvSock:
         def __init__(self, data):
             self._data = data
@@ -486,78 +486,126 @@ def test_syn_reply_parsing_ihl_and_bare_rst(monkeypatch):
         def close(self): pass
 
     class MockSendSock:
+        def __init__(self):
+            self.sent_packets = []
         def setsockopt(self, *a, **k): pass
         def sendto(self, data, addr):
-            # Verify RST sent back on SYN+ACK
-            pass
+            self.sent_packets.append(data)
         def close(self): pass
 
-    monkeypatch.setattr(scanner.socket, "socket", lambda *a, **k: MockSendSock() if a[1] == socket.SOCK_RAW and socket.IPPROTO_TCP == a[2] and not hasattr(monkeypatch, '_recv_mock') else MockRecvSock(synack_packet))
+    send_sock = MockSendSock()
+    recv_sock = MockRecvSock(synack_packet)
+    socks = iter([send_sock, recv_sock])
+    monkeypatch.setattr(scanner.socket, "socket", lambda *a, **k: next(socks))
+    # Pin src_port deterministically so the mock recv matches the src_port check
+    monkeypatch.setattr(scanner.random, "randint", lambda a, b: 40000)
 
-    # This test validates the IHL parsing logic; actual integration test would be complex.
-    # Instead, verify the parse logic directly:
-    # Test that a packet with IHL=6 (24 bytes) and bare RST is handled
-    # We'll test the parsing logic by checking the response classification
+    # Call the actual function under test
+    res = scanner._syn_probe_one(dst_ip, dst_port, 0.2, src_ip)
 
-    # Build a bare RST packet with IHL=5 (no options) for simpler test
-    ip_ihl_ver2 = (4 << 4) + 5
-    ip_tot_len2 = 20 + 20
-    ip_header2 = struct.pack(
+    # Assertions
+    assert res.state == "open"
+    assert len(send_sock.sent_packets) == 2  # SYN sent, then RST teardown sent
+    # 2nd packet is the RST teardown; its TCP header starts at byte 20 (no IP options on outbound)
+    rst_packet = send_sock.sent_packets[1]
+    rst_tcp_header = rst_packet[20:40]
+    rst_tcph = struct.unpack("!HHLLBBHHH", rst_tcp_header)
+    assert rst_tcph[5] == 0x04  # RST flag
+    assert rst_tcph[2] == 2000  # seq == peer's ACK
+
+
+def test_syn_probe_treats_bare_rst_as_closed(monkeypatch):
+    """
+    Test _syn_probe_one treats bare RST (0x04, no ACK) as closed.
+    Feeds a synthetic RST with standard IHL=5 (no IP options).
+    """
+    import struct
+    import socket
+
+    src_ip = "10.0.0.1"
+    dst_ip = "10.0.0.2"
+    src_port = 40000
+    dst_port = 80
+
+    # IP header standard (IHL=5, no options)
+    ip_ihl_ver = (4 << 4) + 5
+    ip_tos = 0
+    ip_tot_len = 20 + 20
+    ip_id = 0
+    ip_frag_off = 0
+    ip_ttl = 64
+    ip_proto = socket.IPPROTO_TCP
+    ip_check = 0
+    ip_saddr = socket.inet_aton(dst_ip)
+    ip_daddr = socket.inet_aton(src_ip)
+    ip_header = struct.pack(
         "!BBHHHBBH4s4s",
-        ip_ihl_ver2, ip_tos, ip_tot_len2, ip_id, ip_frag_off,
-        ip_ttl, ip_proto, 0, ip_saddr, ip_daddr,
+        ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off,
+        ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr,
     )
-    ip_check2 = scanner._checksum(ip_header2)
-    ip_header2 = struct.pack(
+    ip_check = scanner._checksum(ip_header)
+    ip_header = struct.pack(
         "!BBHHHBBH4s4s",
-        ip_ihl_ver2, ip_tos, ip_tot_len2, ip_id, ip_frag_off,
-        ip_ttl, ip_proto, ip_check2, ip_saddr, ip_daddr,
+        ip_ihl_ver, ip_tos, ip_tot_len, ip_id, ip_frag_off,
+        ip_ttl, ip_proto, ip_check, ip_saddr, ip_daddr,
     )
-    tcp_flags_rst = 0x04  # bare RST
-    tcp_header_rst = struct.pack(
+
+    # TCP header: bare RST (0x04) — no ACK bit
+    tcp_seq = 1000
+    tcp_ack_seq = 0
+    offset_res = (5 << 4) + 0
+    tcp_flags = 0x04  # bare RST
+    tcp_window = 5840
+    tcp_check = 0
+    tcp_urg_ptr = 0
+    tcp_header = struct.pack(
         "!HHLLBBHHH",
         dst_port, src_port, tcp_seq, tcp_ack_seq,
-        offset_res, tcp_flags_rst, tcp_window, tcp_check, tcp_urg_ptr,
+        offset_res, tcp_flags, tcp_window, tcp_check, tcp_urg_ptr,
     )
-    pseudo2 = struct.pack(
-        "!4s4sBBH", ip_saddr, ip_daddr, 0, socket.IPPROTO_TCP, len(tcp_header_rst)
+    pseudo = struct.pack(
+        "!4s4sBBH", ip_saddr, ip_daddr, 0, socket.IPPROTO_TCP, len(tcp_header)
     )
-    tcp_check_rst = scanner._checksum(pseudo2 + tcp_header_rst)
-    tcp_header_rst = struct.pack(
+    tcp_check = scanner._checksum(pseudo + tcp_header)
+    tcp_header = struct.pack(
         "!HHLLBBH",
-        dst_port, src_port, tcp_seq, tcp_ack_seq, offset_res, tcp_flags_rst, tcp_window,
-    ) + struct.pack("!H", tcp_check_rst) + struct.pack("!H", tcp_urg_ptr)
+        dst_port, src_port, tcp_seq, tcp_ack_seq, offset_res, tcp_flags, tcp_window,
+    ) + struct.pack("!H", tcp_check) + struct.pack("!H", tcp_urg_ptr)
 
-    # Build a bare RST packet with IHL=5 (no options) for simpler test
-    ip_ihl_ver2 = (4 << 4) + 5
-    ip_tot_len2 = 20 + 20
-    ip_header2 = struct.pack(
-        "!BBHHHBBH4s4s",
-        ip_ihl_ver2, ip_tos, ip_tot_len2, ip_id, ip_frag_off,
-        ip_ttl, ip_proto, 0, ip_saddr, ip_daddr,
-    )
-    ip_check2 = scanner._checksum(ip_header2)
-    ip_header2 = struct.pack(
-        "!BBHHHBBH4s4s",
-        ip_ihl_ver2, ip_tos, ip_tot_len2, ip_id, ip_frag_off,
-        ip_ttl, ip_proto, ip_check2, ip_saddr, ip_daddr,
-    )
-    tcp_flags_rst = 0x04  # bare RST
-    tcp_header_rst = struct.pack(
-        "!HHLLBBHHH",
-        dst_port, src_port, tcp_seq, tcp_ack_seq,
-        offset_res, tcp_flags_rst, tcp_window, tcp_check, tcp_urg_ptr,
-    )
-    pseudo2 = struct.pack(
-        "!4s4sBBH", ip_saddr, ip_daddr, 0, socket.IPPROTO_TCP, len(tcp_header_rst)
-    )
-    tcp_check_rst = scanner._checksum(pseudo2 + tcp_header_rst)
-    tcp_header_rst = struct.pack(
-        "!HHLLBBH",
-        dst_port, src_port, tcp_seq, tcp_ack_seq, offset_res, tcp_flags_rst, tcp_window,
-    ) + struct.pack("!H", tcp_check_rst) + struct.pack("!H", tcp_urg_ptr)
+    rst_packet = ip_header + tcp_header
 
-    _ = ip_header2 + tcp_header_rst  # construct packet for completeness
+    # Mock sockets
+    class MockRecvSock:
+        def __init__(self, data):
+            self._data = data
+            self._called = False
+        def settimeout(self, v): pass
+        def recvfrom(self, size):
+            if self._called:
+                raise socket.timeout
+            self._called = True
+            return self._data, ("10.0.0.2", 0)
+        def close(self): pass
+
+    class MockSendSock:
+        def __init__(self):
+            self.sent_packets = []
+        def setsockopt(self, *a, **k): pass
+        def sendto(self, data, addr):
+            self.sent_packets.append(data)
+        def close(self): pass
+
+    send_sock = MockSendSock()
+    recv_sock = MockRecvSock(rst_packet)
+    socks = iter([send_sock, recv_sock])
+    monkeypatch.setattr(scanner.socket, "socket", lambda *a, **k: next(socks))
+    monkeypatch.setattr(scanner.random, "randint", lambda a, b: 40000)
+
+    res = scanner._syn_probe_one(dst_ip, dst_port, 0.2, src_ip)
+
+    # Assertions
+    assert res.state == "closed"
+    assert len(send_sock.sent_packets) == 1  # Only SYN sent; no RST teardown needed for RST response
 
 def test_shodan_enrich_rejects_private_ip(monkeypatch):
     from netsentinel import shodan_enrich

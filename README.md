@@ -159,8 +159,7 @@ Rather than reaching for `scapy`, the SYN scanner builds raw IP and TCP
 headers by hand with `struct.pack`, computes the IP/TCP checksums in
 network byte order (`!H`), and sends the packet through a `SOCK_RAW`
 socket with `IP_HDRINCL` set. A second raw socket listens for the
-matching SYN/ACK (open) or RST (closed) response, then sends a checksum-
-correct RST (flags `0x04`, seq = peer ACK) to tear down the half-open
+matching SYN/ACK (open) or RST (closed) response, then sends a checksum-correct RST (flags `0x04`, seq = peer ACK) to tear down the half-open
 connection cleanly. This was deliberately implemented from scratch as a
 learning exercise in how the TCP handshake and IP/TCP header format work
 at the byte level — the same fundamentals Nmap's SYN scan (`-sS`) is
@@ -197,7 +196,7 @@ installed separately and are **not** added to `setup.py` `install_requires`.
 # Install dev tools
 pip install pytest ruff "mypy>=1.11,<1.15"
 
-# Run the full test suite (32 loopback-safe tests, no root or network needed)
+# Run the full test suite (49 loopback-safe tests, no root or network needed)
 pytest tests/ -v
 
 # Lint
